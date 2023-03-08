@@ -7,11 +7,24 @@ export interface TransactionExplanation extends BaseTransactionExplanation {
 
 export interface MessageData {
   typeUrl: string;
-  value: {
-    fromAddress: string;
-    toAddress: string;
-    amount: Coin[];
-  };
+  value: SendMessage | DelegateOrUndelegeteMessage | WithdrawDelegatorRewardsMessage;
+}
+
+export interface SendMessage {
+  fromAddress: string;
+  toAddress: string;
+  amount: Coin[];
+}
+
+export interface DelegateOrUndelegeteMessage {
+  delegatorAddress: string;
+  validatorAddress: string;
+  amount: Coin[];
+}
+
+export interface WithdrawDelegatorRewardsMessage {
+  delegatorAddress: string;
+  validatorAddress: string;
 }
 
 export interface FeeData {
@@ -27,7 +40,7 @@ export interface TxData extends AtomTransaction {
 }
 
 export interface AtomTransaction {
-  type: string;
+  type: TransactionType;
   signerAddress: string;
   sequence: number;
   sendMessages: MessageData[];

@@ -13,7 +13,14 @@ import assert from 'assert';
 import BigNumber from 'bignumber.js';
 
 import { validDenoms } from './constants';
-import { AtomTransaction, FeeData, MessageData } from './iface';
+import {
+  AtomTransaction,
+  DelegateOrUndelegeteMessage,
+  FeeData,
+  MessageData,
+  SendMessage,
+  WithdrawDelegatorRewardsMessage,
+} from './iface';
 import { Transaction } from './transaction';
 import utils from './utils';
 
@@ -21,10 +28,9 @@ export abstract class TransactionBuilder extends BaseTransactionBuilder {
   protected _transaction: Transaction;
   private _signatures: Signature[] = [];
 
-  protected _type: string;
   protected _signerAddress: string;
   protected _sequence: number;
-  protected _sendMessages: MessageData[];
+  protected _messages: MessageData[];
   protected _gasBudget: FeeData;
   private _accountNumber?: number;
   private _chainId?: string;
@@ -62,10 +68,6 @@ export abstract class TransactionBuilder extends BaseTransactionBuilder {
     this.transaction.addSignature(publicKey, signature);
   }
 
-  type(type: string): void {
-    this._type = type;
-  }
-
   /**
    * Sets the signerAddress of this transaction.
    * This account will be responsible for paying transaction fees.
@@ -81,6 +83,14 @@ export abstract class TransactionBuilder extends BaseTransactionBuilder {
     return this;
   }
 
+  /**
+   * Sets gas budget of this transaction
+   * Gas budget consist of fee amount and gas limit. Division feeAmount/gasLimit represents
+   * the gas-fee and it should be more than minimum required gas-fee to process the transaction
+   *
+   * @param {FeeData} gasBudget
+   * @returns {TransactionBuilder} this transaction builder
+   */
   gasBudget(gasBudget: FeeData): this {
     this.validateGasBudget(gasBudget);
     this._gasBudget = gasBudget;
@@ -88,6 +98,7 @@ export abstract class TransactionBuilder extends BaseTransactionBuilder {
   }
 
   /**
+   * Sets sequence of this transaction.
    *
    * @param {number} sequence - sequence data for tx signer
    * @returns {TransactionBuilder} This transaction builder
@@ -98,11 +109,16 @@ export abstract class TransactionBuilder extends BaseTransactionBuilder {
     return this;
   }
 
-  sendMessages(sendMessages: MessageData[]): this {
-    this.validateMessageDataArray(sendMessages);
-    this._sendMessages = sendMessages;
-    return this;
-  }
+  /**
+   * Sets messages to the transaction body. Message type will be different based on the transaction type
+   * - For @see TransactionType.StakingActivate required type is @see DelegateOrUndelegeteMessage
+   * - For @see TransactionType.StakingDeactivate required type is @see DelegateOrUndelegeteMessage
+   * - For @see TransactionType.Send required type is @see SendMessage
+   * - For @see TransactionType.StakingWithdraw required type is @see WithdrawDelegatorRewardsMessage
+   * @param {(SendMessage | DelegateOrUndelegeteMessage | WithdrawDelegatorRewardsMessage)[]} messages
+   * @returns {TransactionBuilder} This transaction builder
+   */
+  abstract messages(messages: (SendMessage | DelegateOrUndelegeteMessage | WithdrawDelegatorRewardsMessage)[]): this;
 
   publicKey(publicKey: string | undefined): this {
     this._publicKey = publicKey;
@@ -120,16 +136,18 @@ export abstract class TransactionBuilder extends BaseTransactionBuilder {
   }
   /**
    * Initialize the transaction builder fields using the decoded transaction data
-   *
    * @param {Transaction} tx the transaction data
    */
   initBuilder(tx: Transaction): void {
     this._transaction = tx;
     const txData = tx.toJson();
-    this.type(txData.type);
     this.gasBudget(txData.gasBudget);
     this.signerAddress(txData.signerAddress);
-    this.sendMessages(txData.sendMessages);
+    this.messages(
+      txData.sendMessages.map((message) => {
+        return message.value;
+      })
+    );
     this.gasBudget(txData.gasBudget);
     this.sequence(txData.sequence);
     this.publicKey(txData.publicKey);
@@ -153,17 +171,17 @@ export abstract class TransactionBuilder extends BaseTransactionBuilder {
   }
 
   protected buildAtomTransaction(): AtomTransaction {
-    assert(this._type, new BuildTransactionError('type is required before building'));
     assert(this._signerAddress, new BuildTransactionError('signerAddress is required before building'));
     assert(this._sequence >= 0, new BuildTransactionError('sequence is required before building'));
-    assert(this._sendMessages, new BuildTransactionError('sendMessages are required before building'));
+    assert(this._messages, new BuildTransactionError('sendMessages are required before building'));
     assert(this._gasBudget, new BuildTransactionError('gasPrice is required before building'));
+    assert(this._publicKey, new BuildTransactionError('publicKey is required before building'));
 
     return {
-      type: this._type,
+      type: this.transactionType,
       signerAddress: this._signerAddress,
       sequence: this._sequence,
-      sendMessages: this._sendMessages,
+      sendMessages: this._messages,
       gasBudget: this._gasBudget,
       publicKey: this._publicKey,
       accountNumber: this._accountNumber,
@@ -196,26 +214,40 @@ export abstract class TransactionBuilder extends BaseTransactionBuilder {
     this.validateAmountData(gasBudget.amount);
   }
 
-  private validateMessageDataArray(sendMessages: MessageData[]) {
-    for (const msg of sendMessages) {
-      this.validateMessageData(msg);
-    }
-  }
-
   validateMessageData(messageData: MessageData): void {
     if (!messageData) {
       throw new BuildTransactionError(`Invalid MessageData: undefined`);
     }
-    if (!messageData.typeUrl) {
+    if (!messageData.typeUrl || !utils.getTransactionTypeFromTypeUrl(messageData.typeUrl)) {
       throw new BuildTransactionError(`Invalid MessageData typeurl: ` + messageData.typeUrl);
     }
-    if (!messageData.value.toAddress) {
-      throw new BuildTransactionError(`Invalid MessageData value.toAddress: ` + messageData.value.toAddress);
+    const type = utils.getTransactionTypeFromTypeUrl(messageData.typeUrl);
+    if (type === TransactionType.Send) {
+      const value = messageData.value as SendMessage;
+      if (value.toAddress) {
+        throw new BuildTransactionError(`Invalid MessageData value.toAddress: ` + value.toAddress);
+      }
+      if (value.fromAddress) {
+        throw new BuildTransactionError(`Invalid MessageData value.fromAddress: ` + value.fromAddress);
+      }
+    } else if (
+      type === TransactionType.StakingActivate ||
+      type === TransactionType.StakingDeactivate ||
+      type === TransactionType.StakingWithdraw
+    ) {
+      const value = messageData.value as DelegateOrUndelegeteMessage;
+      if (value.validatorAddress) {
+        throw new BuildTransactionError(`Invalid MessageData value.validatorAddress: ` + value.validatorAddress);
+      }
+      if (value.delegatorAddress) {
+        throw new BuildTransactionError(`Invalid MessageData value.delegatorAddress: ` + value.delegatorAddress);
+      }
+    } else {
+      throw new BuildTransactionError(`Invalid MessageData TypeUrl is not supported: ` + messageData.typeUrl);
     }
-    if (!messageData.value.fromAddress) {
-      throw new BuildTransactionError(`Invalid MessageData value.fromAddress: ` + messageData.value.fromAddress);
+    if (type !== TransactionType.StakingWithdraw) {
+      this.validateAmountData((messageData.value as SendMessage | DelegateOrUndelegeteMessage).amount);
     }
-    this.validateAmountData(messageData.value.amount);
   }
 
   /** @inheritdoc */
@@ -240,16 +272,13 @@ export abstract class TransactionBuilder extends BaseTransactionBuilder {
    * Validates all fields are defined
    */
   private validateTransactionFields(): void {
-    if (this._type === undefined) {
-      throw new BuildTransactionError('Invalid transaction: missing type');
-    }
     if (this._signerAddress === undefined) {
       throw new BuildTransactionError('Invalid transaction: missing signerAddress');
     }
     if (this._sequence === undefined) {
       throw new BuildTransactionError('Invalid transaction: missing sequence');
     }
-    if (this._sendMessages === undefined) {
+    if (this._messages === undefined) {
       throw new BuildTransactionError('Invalid transaction: missing sendMessages');
     }
     if (this._gasBudget === undefined) {
@@ -262,6 +291,46 @@ export abstract class TransactionBuilder extends BaseTransactionBuilder {
     if (value.isLessThan(0)) {
       throw new BuildTransactionError('Value cannot be less than zero');
     }
+  }
+
+  protected validateDelegateOrUndelegateMessage(delegateMessage: DelegateOrUndelegeteMessage) {
+    if (!delegateMessage.validatorAddress || !utils.isValidValidatorAddress(delegateMessage.validatorAddress)) {
+      throw new BuildTransactionError(
+        `Invalid DelegateOrUndelegeteMessage validatorAddress: ` + delegateMessage.validatorAddress
+      );
+    }
+    if (!delegateMessage.delegatorAddress || !utils.isValidAddress(delegateMessage.delegatorAddress)) {
+      throw new BuildTransactionError(
+        `Invalid DelegateOrUndelegeteMessage delegatorAddress: ` + delegateMessage.delegatorAddress
+      );
+    }
+    this.validateAmountData(delegateMessage.amount);
+  }
+
+  protected validateWithdrawRewardsMessage(withdrawRewardsMessage: WithdrawDelegatorRewardsMessage) {
+    if (
+      !withdrawRewardsMessage.validatorAddress ||
+      !utils.isValidValidatorAddress(withdrawRewardsMessage.validatorAddress)
+    ) {
+      throw new BuildTransactionError(
+        `Invalid WithdrawDelegatorRewardsMessage validatorAddress: ` + withdrawRewardsMessage.validatorAddress
+      );
+    }
+    if (!withdrawRewardsMessage.delegatorAddress || !utils.isValidAddress(withdrawRewardsMessage.delegatorAddress)) {
+      throw new BuildTransactionError(
+        `Invalid WithdrawDelegatorRewardsMessage delegatorAddress: ` + withdrawRewardsMessage.delegatorAddress
+      );
+    }
+  }
+
+  protected validateSendMessage(sendMessage: SendMessage) {
+    if (!sendMessage.toAddress || !utils.isValidAddress(sendMessage.toAddress)) {
+      throw new BuildTransactionError(`Invalid SendMessage toAddress: ` + sendMessage.toAddress);
+    }
+    if (!sendMessage.fromAddress || !utils.isValidAddress(sendMessage.fromAddress)) {
+      throw new BuildTransactionError(`Invalid SendMessage fromAddress: ` + sendMessage.fromAddress);
+    }
+    this.validateAmountData(sendMessage.amount);
   }
 
   private validateSequence(sequence: number) {

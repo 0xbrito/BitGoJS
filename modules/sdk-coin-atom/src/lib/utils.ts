@@ -1,4 +1,4 @@
-import { BaseUtils, NotImplementedError, ParseTransactionError, Signature } from '@bitgo/sdk-core';
+import { BaseUtils, NotImplementedError, ParseTransactionError, Signature, TransactionType } from '@bitgo/sdk-core';
 import { encodeSecp256k1Pubkey, encodeSecp256k1Signature } from '@cosmjs/amino';
 import { fromBase64, fromHex, toHex } from '@cosmjs/encoding';
 import {
@@ -13,10 +13,10 @@ import {
 } from '@cosmjs/proto-signing';
 import { Coin, defaultRegistryTypes } from '@cosmjs/stargate';
 import BigNumber from 'bignumber.js';
-import { TxRaw } from 'cosmjs-types/cosmos/tx/v1beta1/tx';
+import { SignDoc, TxRaw } from 'cosmjs-types/cosmos/tx/v1beta1/tx';
 import { Any } from 'cosmjs-types/google/protobuf/any';
 
-import { accountAddressRegex } from './constants';
+import * as constants from './constants';
 import { AtomTransaction, FeeData, MessageData } from './iface';
 import { KeyPair } from './keyPair';
 
@@ -120,10 +120,21 @@ export class Utils implements BaseUtils {
   /**
    * Validates if the address matches with regex @see accountAddressRegex
    *
-   * @param address
+   * @param {string} address
+   * @returns {boolean} - the validation result
    */
   isValidAddress(address: string): boolean {
-    return accountAddressRegex.test(address);
+    return constants.accountAddressRegex.test(address);
+  }
+
+  /**
+   * Validates if the address matches with regex @see accountAddressRegex
+   *
+   * @param {string} address
+   * @returns {boolean} - the validation result
+   */
+  isValidValidatorAddress(address: string): boolean {
+    return constants.validatorAddressRegex.test(address);
   }
 
   /**
@@ -143,9 +154,8 @@ export class Utils implements BaseUtils {
 
   /**
    * Validates whether amount is in range
-   *
-   * @param amount
-   * @returns
+   * @param {number} amount
+   * @returns {boolean} the validation result
    */
   isValidAmount(amount: number): boolean {
     const bigNumberAmount = new BigNumber(amount);
@@ -157,7 +167,8 @@ export class Utils implements BaseUtils {
 
   /**
    * Decodes raw tx data into messages, signing info, and fee data
-   * @param txHex - raw base64 tx
+   * @param {string} txHex - raw base64 tx
+   * @returns {DecodedTxRaw} Decoded transaction
    */
   getDecodedTxFromRawBase64(txRaw: string): DecodedTxRaw {
     return decodeTxRaw(fromBase64(txRaw));
@@ -165,45 +176,17 @@ export class Utils implements BaseUtils {
 
   /**
    * Returns the array of messages in the body of the decoded transaction
-   * @param decodedTx
+   * @param {DecodedTxRaw} decodedTx
+   * @returns {EncodeObject[]} messages along with type url
    */
   private getEncodedMessagesFromDecodedTx(decodedTx: DecodedTxRaw): EncodeObject[] {
     return decodedTx.body.messages;
   }
 
   /**
-   * Arranges a decoded message into our MessageData value interface
-   * @param decodedMessage
-   * @private
-   */
-  private getMessageValueDataFromDecodedMessage(decodedMessage: any): any {
-    return {
-      fromAddress: decodedMessage.fromAddress,
-      toAddress: decodedMessage.toAddress,
-      amount: decodedMessage.amount,
-    };
-  }
-
-  /**
-   * Returns an array of MessageData[] from an encoded messages array
-   * @param encodedMessages
-   * @private
-   */
-  private getMessageDataFromEncodedMessages(encodedMessages: EncodeObject[]): MessageData[] {
-    const messageData: MessageData[] = [];
-    for (const message of encodedMessages) {
-      messageData.push({
-        value: this.getMessageValueDataFromDecodedMessage(this.registry.decode(message)),
-        typeUrl: message.typeUrl,
-      });
-    }
-    return messageData;
-  }
-
-  /**
    * Pulls the sequence number from a DecodedTxRaw AuthInfo property
-   * @param decodedTx
-   * @private
+   * @param {DecodedTxRaw} decodedTx
+   * @returns {number} sequence
    */
   getSequenceFromDecodedTx(decodedTx: DecodedTxRaw): number {
     return Number(decodedTx.authInfo.signerInfos[0].sequence);
@@ -211,7 +194,8 @@ export class Utils implements BaseUtils {
 
   /**
    * Pulls the typeUrl from the encoded message of a DecodedTxRaw
-   * @param decodedTx
+   * @param {DecodedTxRaw} decodedTx
+   * @returns {string} cosmos proto type url
    */
   getTypeUrlFromDecodedTx(decodedTx: DecodedTxRaw): string {
     const encodedMessage = this.getEncodedMessagesFromDecodedTx(decodedTx)[0];
@@ -220,8 +204,8 @@ export class Utils implements BaseUtils {
 
   /**
    * Returns the fee data from the decoded transaction
-   * @param decodedTx
-   * @returns
+   * @param {DecodedTxRaw} decodedTx
+   * @returns {FeeData} fee data
    */
   getGasBudgetFromDecodedTx(decodedTx: DecodedTxRaw): FeeData {
     return {
@@ -232,8 +216,8 @@ export class Utils implements BaseUtils {
 
   /**
    * Returns the publicKey from the decoded transaction
-   * @param decodedTx
-   * @returns publicKey in hex format if it exists, undefined otherwise
+   * @param {DecodedTxRaw} decodedTx
+   * @returns {string | undefined} publicKey in hex format if it exists, undefined otherwise
    */
   getPublicKeyFromDecodedTx(decodedTx: DecodedTxRaw): string | undefined {
     const publicKeyUInt8Array = decodedTx.authInfo.signerInfos?.[0].publicKey?.value;
@@ -245,21 +229,87 @@ export class Utils implements BaseUtils {
 
   /**
    * Returns the array of MessageData[] from the decoded transaction
-   * @param decodedTx
+   * @param {DecodedTxRaw} decodedTx
+   * @returns {MessageData[]} Send transaction message data
    */
-  getMessageDataFromDecodedTx(decodedTx: DecodedTxRaw): MessageData[] {
-    const encodedMessages = this.getEncodedMessagesFromDecodedTx(decodedTx);
-    return this.getMessageDataFromEncodedMessages(encodedMessages);
+  getSendMessageDataFromDecodedTx(decodedTx: DecodedTxRaw): MessageData[] {
+    return decodedTx.body.messages.map((message) => {
+      const value = this.registry.decode(message);
+      return {
+        value: {
+          fromAddress: value.fromAddress,
+          toAddress: value.toAddress,
+          amount: value.amount,
+        },
+        typeUrl: message.typeUrl,
+      };
+    });
+  }
+
+  /**
+   * Returns the array of MessageData[] from the decoded transaction
+   * @param {DecodedTxRaw} decodedTx
+   * @returns {MessageData[]} Delegate of undelegate transaction message data
+   */
+  getDelegateOrUndelegateMessageDataFromDecodedTx(decodedTx: DecodedTxRaw): MessageData[] {
+    return decodedTx.body.messages.map((message) => {
+      const value = this.registry.decode(message);
+      return {
+        value: {
+          delegatorAddress: value.delegatorAddress,
+          validatorAddress: value.validatorAddress,
+          amount: value.amount,
+        },
+        typeUrl: message.typeUrl,
+      };
+    });
+  }
+
+  /**
+   * Returns the array of MessageData[] from the decoded transaction
+   * @param {DecodedTxRaw} decodedTx
+   * @returns {MessageData[]} Delegate of undelegate transaction message data
+   */
+  getWithdrawDelegatorRewardsMessageDataFromDecodedTx(decodedTx: DecodedTxRaw): MessageData[] {
+    return decodedTx.body.messages.map((message) => {
+      const value = this.registry.decode(message);
+      return {
+        value: {
+          delegatorAddress: value.delegatorAddress,
+          validatorAddress: value.validatorAddress,
+        },
+        typeUrl: message.typeUrl,
+      };
+    });
+  }
+
+  /**
+   * Determines bitgo transaction type based on cosmos proto type url
+   * @param {string} typeUrl
+   * @returns {TransactionType | undefined} TransactionType if url is supported else undefined
+   */
+  getTransactionTypeFromTypeUrl(typeUrl: string): TransactionType | undefined {
+    switch (typeUrl) {
+      case constants.sendMsgTypeUrl:
+        return TransactionType.Send;
+      case constants.delegateMsgTypeUrl:
+        return TransactionType.StakingActivate;
+      case constants.undelegateMsgTypeUrl:
+        return TransactionType.StakingDeactivate;
+      case constants.withdrawDelegatorRewardMsgTypeUrl:
+        return TransactionType.StakingWithdraw;
+      default:
+        return undefined;
+    }
   }
 
   /**
    * Creates a sign doc from an atom transaction @see AtomTransaction
-   *
    * @Precondition atomTransaction.accountNumber and atomTransaction.chainId must be defined
-   * @param atomTransaction
-   * @returns
+   * @param {AtomTransaction} atomTransaction
+   * @returns {SignDoc} sign doc
    */
-  createSignDocFromAtomTransaction(atomTransaction: AtomTransaction) {
+  createSignDocFromAtomTransaction(atomTransaction: AtomTransaction): SignDoc {
     if (!atomTransaction.accountNumber) {
       throw new Error('accountNumber is required to create a sign doc');
     }
@@ -272,10 +322,9 @@ export class Utils implements BaseUtils {
 
   /**
    * Creates a txRaw from an atom transaction @see AtomTransaction
-   *
    * @Precondition atomTransaction.publicKey must be defined
-   * @param atomTransaction
-   * @returns
+   * @param {AtomTransaction} atomTransaction
+   * @returns {TxRaw} Unsigned raw transaction
    */
   createTxRawFromAtomTransaction(atomTransaction: AtomTransaction): TxRaw {
     if (!atomTransaction.publicKey) {
@@ -303,10 +352,9 @@ export class Utils implements BaseUtils {
 
   /**
    * Encodes a signature into a txRaw
-   *
-   * @param signature
-   * @param tx
-   * @returns
+   * @param {Uint8Array} secp256k1 signature
+   * @param {TxRaw} Unsigned raw transaction
+   * @returns {TxRaw} Signed raw transaction
    */
   createSignedTxRaw(signature: Signature, tx: { bodyBytes: Uint8Array; authInfoBytes: Uint8Array }): TxRaw {
     const stdSignature = encodeSecp256k1Signature(fromHex(signature.publicKey.pub), signature.signature);
@@ -319,9 +367,8 @@ export class Utils implements BaseUtils {
 
   /**
    * Decodes a raw transaction into a DecodedTxRaw and checks if it has non empty signatures
-   *
-   * @param rawTransaction
-   * @returns
+   * @param {string} rawTransaction
+   * @returns {boolean} true if transaction is signed else false
    */
   isSignedRawTx(rawTransaction: string): boolean {
     const decodedTx = this.getDecodedTxFromRawBase64(rawTransaction);
@@ -333,10 +380,9 @@ export class Utils implements BaseUtils {
 
   /**
    * Decodes a raw transaction into a DecodedTxRaw and returns the signer info in form of {pubKey, signature}
-   *
    * @Assumption Only one signature is present in the raw transaction
-   * @param rawTransaction
-   * @returns
+   * @param {string} rawTransaction
+   * @returns {{{pub: string}, Buffer}} public key and signature
    */
   getSignerInfoFromRawSignedTx(rawTransaction: string) {
     if (!this.isSignedRawTx(rawTransaction)) {

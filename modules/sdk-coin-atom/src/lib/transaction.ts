@@ -9,12 +9,19 @@ import {
   TransactionType,
 } from '@bitgo/sdk-core';
 import { BaseCoin as CoinConfig } from '@bitgo/statics';
+import { toBase64 } from '@cosmjs/encoding';
 import { makeSignBytes } from '@cosmjs/proto-signing';
 import { TxRaw } from 'cosmjs-types/cosmos/tx/v1beta1/tx';
-import { AtomTransactionType, sendMsgType } from './constants';
-import { AtomTransaction, TransactionExplanation, TxData } from './iface';
+
+import {
+  AtomTransaction,
+  DelegateOrUndelegeteMessage,
+  MessageData,
+  SendMessage,
+  TransactionExplanation,
+  TxData,
+} from './iface';
 import utils from './utils';
-import { toBase64 } from '@cosmjs/encoding';
 
 export class Transaction extends BaseTransaction {
   private _atomTransaction: AtomTransaction;
@@ -92,13 +99,7 @@ export class Transaction extends BaseTransaction {
       fee: { fee: this.atomTransaction.gasBudget.amount[0].amount },
       type: this.type,
     };
-
-    switch (this.type) {
-      case TransactionType.Send:
-        return this.explainTransferTransaction(result, explanationResult);
-      default:
-        throw new InvalidTransactionError('Transaction type not supported');
-    }
+    return this.explainTransactionInternal(result, explanationResult);
   }
 
   /**
@@ -121,7 +122,7 @@ export class Transaction extends BaseTransaction {
       const signerInfo = utils.getSignerInfoFromRawSignedTx(rawTransaction);
       this.addSignature(signerInfo.pubKey, signerInfo.signature);
     }
-    this._type = TransactionType.Send;
+    this._type = this._atomTransaction.type;
   }
 
   /**
@@ -144,21 +145,26 @@ export class Transaction extends BaseTransaction {
 
   static deserializeAtomTransaction(rawTx: string): AtomTransaction {
     const decodedTx = utils.getDecodedTxFromRawBase64(rawTx);
-    let type: AtomTransactionType;
     const typeUrl = utils.getTypeUrlFromDecodedTx(decodedTx);
-    if (typeUrl === sendMsgType) {
-      type = AtomTransactionType.Pay;
+    const type: TransactionType | undefined = utils.getTransactionTypeFromTypeUrl(typeUrl);
+    let sendMessageData: MessageData[];
+    let signerAddress: string;
+    if (type === TransactionType.Send) {
+      sendMessageData = utils.getSendMessageDataFromDecodedTx(decodedTx);
+      signerAddress = (sendMessageData[0].value as SendMessage).fromAddress;
+    } else if (type === TransactionType.StakingActivate || type === TransactionType.StakingDeactivate) {
+      sendMessageData = utils.getDelegateOrUndelegateMessageDataFromDecodedTx(decodedTx);
+      signerAddress = (sendMessageData[0].value as DelegateOrUndelegeteMessage).delegatorAddress;
     } else {
       throw new Error('Transaction type not supported: ' + typeUrl);
     }
-    const sendMessageData = utils.getMessageDataFromDecodedTx(decodedTx);
     const sequence = utils.getSequenceFromDecodedTx(decodedTx);
     const gasBudget = utils.getGasBudgetFromDecodedTx(decodedTx);
     const publicKey = utils.getPublicKeyFromDecodedTx(decodedTx);
     return {
       type,
       sendMessages: sendMessageData,
-      signerAddress: sendMessageData[0].value.fromAddress,
+      signerAddress: signerAddress,
       gasBudget,
       sequence,
       publicKey,
@@ -172,14 +178,51 @@ export class Transaction extends BaseTransaction {
    * @param {TransactionExplanation} explanationResult The transaction explanation to be completed
    * @returns {TransactionExplanation}
    */
-  explainTransferTransaction(json: TxData, explanationResult: TransactionExplanation): TransactionExplanation {
-    const outputAmount = this._atomTransaction.sendMessages[0].value.amount[0].amount;
-    const outputs: TransactionRecipient[] = [
-      {
-        address: this._atomTransaction.sendMessages[0].value.toAddress,
-        amount: outputAmount,
-      },
-    ];
+  explainTransactionInternal(json: TxData, explanationResult: TransactionExplanation): TransactionExplanation {
+    let outputs: TransactionRecipient[];
+    let message;
+    let outputAmount;
+    switch (this.type) {
+      case TransactionType.Send:
+        explanationResult.type = TransactionType.Send;
+        message = this._atomTransaction.sendMessages[0].value as SendMessage;
+        outputAmount = message.amount[0].amount;
+        outputs = [
+          {
+            address: message.toAddress,
+            amount: outputAmount,
+          },
+        ];
+        break;
+      case TransactionType.StakingActivate:
+        explanationResult.type = TransactionType.StakingActivate;
+        message = this._atomTransaction.sendMessages[0].value as DelegateOrUndelegeteMessage;
+        outputAmount = message.amount[0].amount;
+        outputs = [
+          {
+            address: message.validatorAddress,
+            amount: outputAmount,
+          },
+        ];
+        break;
+      case TransactionType.StakingDeactivate:
+        explanationResult.type = TransactionType.StakingDeactivate;
+        message = this._atomTransaction.sendMessages[0].value as DelegateOrUndelegeteMessage;
+        outputAmount = message.amount[0].amount;
+        outputs = [
+          {
+            address: message.validatorAddress,
+            amount: outputAmount,
+          },
+        ];
+        break;
+      case TransactionType.StakingWithdraw:
+        explanationResult.type = TransactionType.StakingWithdraw;
+        outputs = [];
+        break;
+      default:
+        throw new InvalidTransactionError('Transaction type not supported');
+    }
     return {
       ...explanationResult,
       outputAmount,

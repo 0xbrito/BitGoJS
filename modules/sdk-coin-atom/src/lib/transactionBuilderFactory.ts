@@ -3,6 +3,8 @@ import { TransactionBuilder } from './transactionBuilder';
 import { TransferBuilder } from './transferBuilder';
 import { BaseCoin as CoinConfig } from '@bitgo/statics';
 import { Transaction } from './transaction';
+import { StakingActivateBuilder } from './StakingActivateBuilder';
+import { StakingDeactivateBuilder } from './StakingDeactivateBuilder';
 
 export class TransactionBuilderFactory extends BaseTransactionBuilderFactory {
   constructor(_coinConfig: Readonly<CoinConfig>) {
@@ -16,6 +18,10 @@ export class TransactionBuilderFactory extends BaseTransactionBuilderFactory {
       switch (tx.type) {
         case TransactionType.Send:
           return this.getTransferBuilder(tx);
+        case TransactionType.StakingActivate:
+          return this.getStakingActivateBuilder(tx);
+        case TransactionType.StakingDeactivate:
+          return this.getStakingDeactivateBuilder(tx);
         default:
           throw new InvalidTransactionError('Invalid transaction');
       }
@@ -28,7 +34,14 @@ export class TransactionBuilderFactory extends BaseTransactionBuilderFactory {
   getTransferBuilder(tx?: Transaction): TransferBuilder {
     return this.initializeBuilder(tx, new TransferBuilder(this._coinConfig));
   }
-
+  /** @inheritdoc */
+  getStakingActivateBuilder(tx?: Transaction): StakingActivateBuilder {
+    return this.initializeBuilder(tx, new StakingActivateBuilder(this._coinConfig));
+  }
+  /** @inheritdoc */
+  getStakingDeactivateBuilder(tx?: Transaction): StakingDeactivateBuilder {
+    return this.initializeBuilder(tx, new StakingDeactivateBuilder(this._coinConfig));
+  }
   /** @inheritdoc */
   getWalletInitializationBuilder(): void {
     throw new Error('Method not implemented.');

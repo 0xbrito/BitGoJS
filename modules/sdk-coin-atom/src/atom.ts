@@ -142,7 +142,7 @@ export class Atom extends BaseCoin {
   }
 
   isValidAddress(address: string): boolean {
-    return utils.isValidAddress(address);
+    return utils.isValidAddress(address) || utils.isValidValidatorAddress(address);
   }
 
   signTransaction(params: SignTransactionOptions): Promise<SignedTransaction> {
