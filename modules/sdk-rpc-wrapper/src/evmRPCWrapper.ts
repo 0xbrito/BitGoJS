@@ -1,5 +1,12 @@
-import { EVMRPCRequest, EVMRPCResult } from './types';
-import { Wallet, WalletSignMessageOptions, WalletSignTypedDataOptions, SignTypedDataVersion } from '@bitgo/sdk-core';
+import { EVMRPCRequest, EVMRPCResult, EVMRPCTransactionOptions } from './types';
+import {
+  Wallet,
+  WalletSignMessageOptions,
+  WalletSignTypedDataOptions,
+  SignTypedDataVersion,
+  SendManyOptions,
+} from '@bitgo/sdk-core';
+import { hexStringToNumber } from '@bitgo/sdk-coin-eth';
 
 export class EvmRPCWrapper {
   private wallet: Wallet;
@@ -14,11 +21,11 @@ export class EvmRPCWrapper {
   /**
    * Handles RPC call from an EVM provider and invokes the appropriate BitGo SDK wallet method.
    *
-   * @param param
-   * @param walletPassphrase
+   * @evmrpcRequest request
+   * @evmrpcRequest walletPassphrase
    */
-  async handleRPCCall(param: EVMRPCRequest, walletPassphrase: string): Promise<EVMRPCResult> {
-    const { method, id, jsonrpc, params } = param;
+  async handleRPCCall(request: EVMRPCRequest, walletPassphrase: string): Promise<EVMRPCResult> {
+    const { method, id, jsonrpc, params } = request;
     let result;
 
     switch (method) {
@@ -41,6 +48,10 @@ export class EvmRPCWrapper {
         };
         result = await this.wallet.signTypedData(walletSignTypedDataOptions);
         break;
+
+      case 'eth_sendTransaction':
+        result = await this.sendTransaction(params[0] as unknown as EVMRPCTransactionOptions);
+        break;
       default:
         throw new Error(`method '${method}' not yet implemented`);
     }
@@ -50,5 +61,22 @@ export class EvmRPCWrapper {
       jsonrpc,
       result,
     };
+  }
+
+  private async sendTransaction(options: EVMRPCTransactionOptions): Promise<any> {
+    const { to: address, data, gasPrice: gasPriceHex, gasLimit: gasLimitHex, value: amount } = options;
+
+    const sendManyOptions: SendManyOptions = {
+      recipients: [
+        {
+          address,
+          amount,
+          data,
+        },
+      ],
+      gasPrice: hexStringToNumber(gasPriceHex),
+      gasLimit: hexStringToNumber(gasLimitHex),
+    };
+    return await this.wallet.sendMany(sendManyOptions);
   }
 }
