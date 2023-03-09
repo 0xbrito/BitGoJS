@@ -17,7 +17,7 @@ export type WalletInputBuilder = {
   cosigner: bitgo.KeyName;
 };
 
-export type InscriptionOutputs = {
+export type InscriptionTransactionOutputs = {
   inscriptionRecipient: string | Buffer;
   changeOutputs: [WalletOutputPath, WalletOutputPath];
 };
@@ -34,12 +34,12 @@ export function createPsbtFromOutputLayout(
   network: Network,
   inputBuilder: WalletInputBuilder,
   unspents: bitgo.WalletUnspent<bigint>[],
-  outputs: InscriptionOutputs,
+  outputs: InscriptionTransactionOutputs,
   outputLayout: OutputLayout
 ): bitgo.UtxoPsbt {
   const psbt = bitgo.createPsbtForNetwork({ network: network });
-  if (unspents.length !== 1) {
-    throw new Error(`multiple unspents not supported yet`);
+  if (unspents.length === 0) {
+    throw new Error(`must provide at least one unspent`);
   }
   unspents.forEach((u) =>
     bitgo.addWalletUnspentToPsbt(
@@ -51,8 +51,8 @@ export function createPsbtFromOutputLayout(
       psbt.network
     )
   );
-  const [input] = unspents;
-  const ordOutputs = getOrdOutputsForLayout(new OrdOutput(input.value), outputLayout);
+  const ordInput = OrdOutput.joinAll(unspents.map((u) => new OrdOutput(u.value)));
+  const ordOutputs = getOrdOutputsForLayout(ordInput, outputLayout);
   toArray(ordOutputs).forEach((ordOutput) => {
     if (ordOutput === null) {
       return;
@@ -94,16 +94,21 @@ function getFee(vsize: number, rateSatPerKB: number): bigint {
   return BigInt(Math.ceil((vsize * rateSatPerKB) / 1000));
 }
 
+/**
+ * @param inputs - inscription input must come first
+ * @param satPoint - location of the inscription
+ * @param outputs
+ * @param constraints
+ */
 export function findOutputLayoutForWalletUnspents(
   inputs: bitgo.WalletUnspent<bigint>[],
   satPoint: SatPoint,
-  outputs: InscriptionOutputs,
+  outputs: InscriptionTransactionOutputs,
   constraints: InscriptionTransactionConstraints
 ): OutputLayout | undefined {
-  if (inputs.length !== 1) {
-    throw new Error(`only single input supported currently`);
+  if (inputs.length === 0) {
+    throw new Error(`must provide at least one input`);
   }
-
   if (outputs.changeOutputs[0].chain !== outputs.changeOutputs[1].chain) {
     // otherwise our fee calc is too complicated
     throw new Error(`wallet outputs must be on same chain`);
@@ -115,8 +120,11 @@ export function findOutputLayoutForWalletUnspents(
     maxInscriptionOutput = BigInt(20_000),
   } = constraints;
 
-  const [input] = inputs;
-  const inscriptionOutput = new OrdOutput(input.value, [toSatRange(satPoint)]);
+  // Join all the inputs into a single inscriptionOutput.
+  // For the purposes of finding a layout there is no difference.
+  const inscriptionOutput = OrdOutput.joinAll(
+    inputs.map((i) => new OrdOutput(i.value, i === inputs[0] ? [toSatRange(satPoint)] : []))
+  );
   return findOutputLayout(inscriptionOutput, {
     minChangeOutput,
     minInscriptionOutput,
@@ -137,7 +145,7 @@ export function createPsbtForSingleInscriptionPassingTransaction(
   inputBuilder: WalletInputBuilder,
   unspents: bitgo.WalletUnspent<bigint>[],
   satPoint: SatPoint,
-  outputs: InscriptionOutputs,
+  outputs: InscriptionTransactionOutputs,
   constraints: InscriptionTransactionConstraints
 ): bitgo.UtxoPsbt {
   const layout = findOutputLayoutForWalletUnspents(unspents, satPoint, outputs, constraints);
