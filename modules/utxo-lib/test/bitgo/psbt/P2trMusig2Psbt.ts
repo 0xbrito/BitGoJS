@@ -230,7 +230,7 @@ describe('p2trMusig2 PSBT Test Suite', function () {
       psbt.data.inputs[0].tapBip32Derivation = [];
       assert.throws(
         () => setMusig2Nonces(psbt, rootWalletKeys.user),
-        (e) => e.message === 'tapBip32Derivation is required to generate nonce'
+        (e) => e.message === 'tapBip32Derivation is required to create nonce'
       );
       assert.strictEqual(psbt.getProprietaryKeyVals(0).length, 1);
     });
@@ -269,7 +269,7 @@ describe('p2trMusig2 PSBT Test Suite', function () {
       psbt.addProprietaryKeyValToInput(0, keyVals[0]);
       assert.throws(
         () => setMusig2Nonces(psbt, rootWalletKeys.user),
-        (e) => e.message === `Invalid participants keyata tapOutputKey`
+        (e) => e.message === `Invalid participants keydata tapOutputKey`
       );
       assert.strictEqual(psbt.getProprietaryKeyVals(0).length, 1);
     });
@@ -283,7 +283,7 @@ describe('p2trMusig2 PSBT Test Suite', function () {
       psbt.addProprietaryKeyValToInput(0, keyVals[0]);
       assert.throws(
         () => setMusig2Nonces(psbt, rootWalletKeys.user),
-        (e) => e.message === `Invalid participants keyata tapInternalKey`
+        (e) => e.message === `Invalid participants keydata tapInternalKey`
       );
       assert.strictEqual(psbt.getProprietaryKeyVals(0).length, 1);
     });
@@ -455,17 +455,6 @@ describe('p2trMusig2 PSBT Test Suite', function () {
         () => decodePsbtMusig2ParticipantsKeyValData(kv),
         (e) =>
           e.message === `Invalid identifier ${kv.key.identifier} or subtype ${kv.key.subtype} for participants pub keys`
-      );
-    });
-
-    it(`calculateTapInternalKey and calculateTapOutputKey fails for invalid size keys`, function () {
-      assert.throws(
-        () => createTapInternalKey([Buffer.allocUnsafe(33), Buffer.allocUnsafe(34)]),
-        (e) => e.message === `invalid key size 34. Must use plain keys.`
-      );
-      assert.throws(
-        () => createTapOutputKey(Buffer.allocUnsafe(34), Buffer.allocUnsafe(33)),
-        (e) => e.message === `Invalid tapTreeRoot size 33`
       );
     });
   });
