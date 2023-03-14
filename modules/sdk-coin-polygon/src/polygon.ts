@@ -326,6 +326,10 @@ export class Polygon extends Eth {
    * @returns {Promise<RecoveryInfo | OfflineVaultTxInfo>}
    */
   async recoverEthLike(params: RecoverOptions): Promise<RecoveryInfo | OfflineVaultTxInfo> {
+    if (params.feeAddress) {
+      return this.recoverEthLikeforEvmBasedRecovery(params);
+    }
+
     this.validateRecoveryParams(params);
     const isUnsignedSweep = getIsUnsignedSweep(params);
 
@@ -479,6 +483,123 @@ export class Polygon extends Eth {
       id: signedTx.toJson().id,
       tx: signedTx.toBroadcastFormat(),
     };
+  }
+
+  validateEvmBasedRecoveryParams(params: RecoverOptions): void {
+    if (_.isUndefined(params.userKey)) {
+      throw new Error('missing userKey');
+    }
+
+    if (_.isUndefined(params.feeAddress) || !this.isValidAddress(params.feeAddress)) {
+      throw new Error('invalid feeAddress');
+    }
+
+    if (_.isUndefined(params.walletContractAddress) || !this.isValidAddress(params.walletContractAddress)) {
+      throw new Error('invalid walletContractAddress');
+    }
+
+    if (_.isUndefined(params.recoveryDestination) || !this.isValidAddress(params.recoveryDestination)) {
+      throw new Error('invalid recoveryDestination');
+    }
+  }
+
+  /**
+   * Recovers a tx with non-TSS keys
+   * same expected arguments as recover method
+   */
+  protected async recoverEthLikeforEvmBasedRecovery(
+    params: RecoverOptions
+  ): Promise<RecoveryInfo | OfflineVaultTxInfo> {
+    this.validateEvmBasedRecoveryParams(params);
+
+    // Clean up whitespace from entered values
+    const userKey = params.userKey.replace(/\s/g, '');
+    const feeAddress = params.feeAddress ? params.feeAddress?.replace(/\s/g, '') : '';
+
+    const gasLimit = new optionalDeps.ethUtil.BN(this.setGasLimit(params.gasLimit));
+    const gasPrice = params.eip1559
+      ? new optionalDeps.ethUtil.BN(params.eip1559.maxFeePerGas)
+      : new optionalDeps.ethUtil.BN(this.setGasPrice(params.gasPrice));
+
+    const feeAddressNonce = await this.getAddressNonce(feeAddress);
+
+    // get balance of backupKey to ensure funds are available to pay fees
+    const feeAddressBalance = await this.queryAddressBalance(feeAddress);
+    const totalGasNeeded = gasPrice.mul(gasLimit);
+    const weiToGwei = 10 ** 9;
+    if (feeAddressBalance.lt(totalGasNeeded)) {
+      throw new Error(
+        `Fee address ${feeAddress} has balance ${(feeAddressBalance / weiToGwei).toString()} Gwei.` +
+          `This address must have a balance of at least ${(totalGasNeeded / weiToGwei).toString()}` +
+          ` Gwei to perform recoveries. Try sending some MATIC to this address then retry.`
+      );
+    }
+
+    // get balance of wallet
+    const txAmount = await this.queryAddressBalance(params.walletContractAddress);
+
+    // build recipients object
+    const recipients = [
+      {
+        address: params.recoveryDestination,
+        amount: txAmount.toString(10),
+      },
+    ];
+
+    // Get sequence ID using contract call
+    // we need to wait between making two polygonscan calls to avoid getting banned
+    await new Promise((resolve) => setTimeout(resolve, 1000));
+    const sequenceId = await this.querySequenceId(params.walletContractAddress);
+
+    const txInfo = {
+      recipient: recipients[0],
+      expireTime: this.getDefaultExpireTime(),
+      contractSequenceId: sequenceId,
+      gasLimit: gasLimit.toString(10),
+    };
+
+    const txBuilder = this.getTransactionBuilder() as TransactionBuilder;
+    txBuilder.counter(feeAddressNonce);
+    txBuilder.contract(params.walletContractAddress);
+    let txFee;
+    if (params.eip1559) {
+      txFee = {
+        eip1559: {
+          maxPriorityFeePerGas: params.eip1559.maxPriorityFeePerGas,
+          maxFeePerGas: params.eip1559.maxFeePerGas,
+        },
+      };
+    } else {
+      txFee = { fee: gasPrice.toString() };
+    }
+    txBuilder.fee({
+      ...txFee,
+      gasLimit: gasLimit.toString(),
+    });
+    txBuilder
+      .transfer()
+      .amount(recipients[0].amount)
+      .contractSequenceId(sequenceId)
+      .expirationTime(this.getDefaultExpireTime())
+      .to(params.recoveryDestination);
+
+    const tx = await txBuilder.build();
+
+    const response: OfflineVaultTxInfo = {
+      txHex: tx.toBroadcastFormat(),
+      userKey,
+      coin: this.getChain(),
+      gasPrice: optionalDeps.ethUtil.bufferToInt(gasPrice).toFixed(),
+      gasLimit,
+      recipients: [txInfo.recipient],
+      walletContractAddress: tx.toJson().to,
+      amount: txInfo.recipient.amount,
+      backupKeyNonce: feeAddressNonce,
+      eip1559: params.eip1559,
+    };
+    _.extend(response, txInfo);
+    response.nextContractSequenceId = response.contractSequenceId;
+    return response;
   }
 
   /** @inheritDoc */

@@ -191,7 +191,7 @@ export interface OfflineVaultTxInfo {
   tx?: string;
   txHex?: string;
   userKey: string;
-  backupKey: string;
+  backupKey?: string;
   coin: string;
   gasPrice: number;
   gasLimit: number;
@@ -220,6 +220,7 @@ export interface RecoverOptions {
   eip1559?: EIP1559;
   replayProtectionOptions?: ReplayProtectionOptions;
   isTss?: boolean;
+  feeAddress?: string;
 }
 
 export interface BuildTransactionParams {
