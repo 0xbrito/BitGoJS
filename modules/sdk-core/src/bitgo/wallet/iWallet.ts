@@ -20,6 +20,7 @@ import {
   TokenTransferRecipientParams,
 } from '../utils';
 import { ILightning } from '../lightning';
+import { IInscription } from "../inscription";
 
 export interface MaximumSpendableOptions {
   minValue?: number | string;
@@ -633,7 +634,6 @@ export interface IWallet {
   prebuildTransaction(params?: PrebuildTransactionOptions): Promise<PrebuildTransactionResult>;
   signTransaction(params?: WalletSignTransactionOptions): Promise<SignedTransaction>;
   getUserPrv(params?: GetUserPrvOptions): string;
-  prebuildAndSignTransaction(params?: PrebuildAndSignTransactionOptions): Promise<SignedTransaction>;
   accelerateTransaction(params?: AccelerateTransactionOptions): Promise<any>;
   submitTransaction(params?: SubmitTransactionOptions): Promise<any>;
   send(params?: SendOptions): Promise<any>;
@@ -661,4 +661,5 @@ export interface IWallet {
   signMessage(params: WalletSignMessageOptions): Promise<SignedMessage>;
   signTypedData(params: WalletSignTypedDataOptions): Promise<SignedMessage>;
   fetchCrossChainUTXOs(params: FetchCrossChainUTXOsOptions): Promise<CrossChainUTXO[]>;
+  inscription(): IInscription;
 }

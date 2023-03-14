@@ -88,6 +88,7 @@ import { Lightning } from '../lightning';
 import EddsaUtils from '../utils/tss/eddsa';
 import { EcdsaUtils } from '../utils/tss/ecdsa';
 import { getTxRequest } from '../tss';
+import { Inscription } from '../inscription';
 
 const debug = require('debug')('bitgo:v2:wallet');
 
@@ -2594,6 +2595,16 @@ export class Wallet implements IWallet {
       throw new Error(`Lightning not supported for ${this.coin()}`);
     }
     return new Lightning(this.bitgo, this);
+  }
+
+  /**
+   * Create isncriptions for btc/tbtc from this wallet
+   */
+  public inscription(): Inscription {
+    // if (!this.baseCoin.supportsInscription()) {
+    //   throw new Error(`Lightning not supported for ${this.coin()}`);
+    // }
+    return new Inscription(this.bitgo, this);
   }
 
   /* MARK: TSS Helpers */
